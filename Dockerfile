@@ -8,7 +8,7 @@
 # requirements.txt exactly. The Python bindings and the browser build are
 # tightly coupled — a mismatch causes a real runtime failure, not a build
 # warning. If you ever bump one, bump both together.
-FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
 
 WORKDIR /app
 
