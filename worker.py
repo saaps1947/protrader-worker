@@ -104,6 +104,28 @@ def run_session():
             page.add_init_script(f"localStorage.setItem('pt_server', '{SERVER_URL}');")
             log(f"Injected SERVER_URL: {SERVER_URL}")
 
+            # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
+            # 5 minutes — not enough to see WHY it flips. This intercepts
+            # every read/write to window.serverOk via a property descriptor,
+            # so every single change gets logged with a real timestamp,
+            # before the app's own `var serverOk=false;` declaration runs.
+            # A `var` at top-level scope assigns to window, so the app's own
+            # assignments (serverOk=true / serverOk=false) route through
+            # this getter/setter instead of silently overwriting it.
+            page.add_init_script("""
+                (function(){
+                    var _v = false;
+                    Object.defineProperty(window, 'serverOk', {
+                        get: function(){ return _v; },
+                        set: function(nv){
+                            console.log('[serverOk] ' + _v + ' -> ' + nv);
+                            _v = nv;
+                        },
+                        configurable: true
+                    });
+                })();
+            """)
+
             # Pipe the app's own console output into Render's logs — this is
             # the actual visibility into whether scans are firing, whether
             # /market calls are succeeding, etc. Filtered to skip pure noise.
