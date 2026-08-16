@@ -59,6 +59,14 @@ SERVER_URL = os.environ.get("PROTRADER_SERVER_URL", "https://protrader-server.on
 # init sequence (startPolling, the 3-min scan timer, etc.) just starts over.
 RESTART_EVERY_SECONDS = 4 * 60 * 60   # 4 hours
 HEALTH_LOG_EVERY_SECONDS = 5 * 60     # print a heartbeat every 5 min
+# The app's own init sequence fires its first /market call essentially
+# immediately on load, but the ACTUAL network round-trip that flips
+# serverOk=true takes real time — confirmed in production logs: the
+# heartbeat fired ~1s after "Page loaded" and reported server reachable:
+# False, even though SERVER_URL was correctly set by then. That's a race
+# in this timing, not a real connectivity problem. First check now waits
+# long enough to give that fetch a fair chance to actually complete.
+FIRST_HEALTH_CHECK_DELAY_SECONDS = 25
 
 
 def log(msg):
@@ -115,7 +123,7 @@ def run_session():
             log("Page loaded — app's own scan/poll timers are now running")
 
             session_start = time.time()
-            last_health_log = 0
+            last_health_log = time.time() - HEALTH_LOG_EVERY_SECONDS + FIRST_HEALTH_CHECK_DELAY_SECONDS
 
             while True:
                 elapsed = time.time() - session_start
