@@ -30,6 +30,7 @@ DEPLOY AS: a separate Render Background Worker service, same repo as
 server.py, different Start Command. See DEPLOY.md in this folder.
 """
 
+import os
 import time
 import sys
 import traceback
@@ -40,6 +41,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 # ── CONFIG ───────────────────────────────────────────────────────────────
 APP_URL = "https://saaps1947.github.io/Protrader/"
+# BUG FIX: the app reads its backend URL from localStorage.getItem("pt_server"),
+# set once via the phone's Settings screen. That's fine for a real browser
+# with persistent history — but this worker launches a brand-new, empty
+# Chromium profile every session, with no localStorage carried over from
+# anywhere. Without this, SERVER_URL silently stays "" forever, the page
+# loads but can never reach the backend, and every heartbeat reports
+# "server reachable: False" — confirmed exactly this in production logs.
+# Injected into localStorage before the page's own scripts run, same key
+# the app already reads — zero changes needed to index.html itself.
+SERVER_URL = os.environ.get("PROTRADER_SERVER_URL", "https://protrader-server.onrender.com")
 # Relaunch the browser periodically — long-lived headless Chromium sessions
 # accumulate memory over many hours (growing SIGNAL_LOG/localStorage, DOM
 # state, IndexedDB writes). A clean relaunch every few hours is cheap
@@ -76,6 +87,14 @@ def run_session():
         )
         try:
             page = browser.new_page(viewport={"width": 430, "height": 932})
+
+            # Must run BEFORE the app's own scripts execute on navigation —
+            # add_init_script (not a post-load page.evaluate) guarantees this
+            # ordering. Sets the exact localStorage key index.html already
+            # reads for SERVER_URL, so the app picks it up on its own, same
+            # as it would after a real one-time manual Settings entry.
+            page.add_init_script(f"localStorage.setItem('pt_server', '{SERVER_URL}');")
+            log(f"Injected SERVER_URL: {SERVER_URL}")
 
             # Pipe the app's own console output into Render's logs — this is
             # the actual visibility into whether scans are firing, whether
