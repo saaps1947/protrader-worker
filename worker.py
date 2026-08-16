@@ -118,6 +118,20 @@ def run_session():
             page.on("console", on_console)
             page.on("pageerror", lambda exc: log(f"[page error] {exc}"))
 
+            # FIX: the browser's own generic "Failed to load resource: 404"
+            # console line never includes which URL failed — that detail
+            # only lives in the browser's Network panel, invisible from here
+            # until now. Without this, "something 404'd" was unactionable —
+            # this makes it a specific, fixable finding on the next run.
+            def on_response(response):
+                if response.status >= 400:
+                    log(f"[network] {response.status} {response.request.method} {response.url}")
+            def on_request_failed(request):
+                log(f"[network] FAILED (no response) {request.method} {request.url} "
+                    f"— {request.failure}")
+            page.on("response", on_response)
+            page.on("requestfailed", on_request_failed)
+
             log(f"Navigating to {APP_URL}")
             page.goto(APP_URL, wait_until="domcontentloaded", timeout=60000)
             log("Page loaded — app's own scan/poll timers are now running")
