@@ -57,7 +57,14 @@ SERVER_URL = os.environ.get("PROTRADER_SERVER_URL", "https://protrader-server.on
 # insurance against a slow OOM on a memory-constrained Render instance,
 # and costs nothing functionally — the page reloads fresh and its own
 # init sequence (startPolling, the 3-min scan timer, etc.) just starts over.
-RESTART_EVERY_SECONDS = 4 * 60 * 60   # 4 hours
+#
+# FIX: was 4 hours — Render's own OOM-restart email confirmed the 512MB
+# limit was actually being hit before this window elapsed. Shortened as a
+# safety net alongside the resource-blocking above, not a replacement for
+# it — restarting more often just means the page re-inits a bit more
+# often, which costs a brief pause, not lost state (nothing persists
+# between sessions in a fresh headless profile anyway).
+RESTART_EVERY_SECONDS = 90 * 60   # 90 minutes
 HEALTH_LOG_EVERY_SECONDS = 5 * 60     # print a heartbeat every 5 min
 # The app's own init sequence fires its first /market call essentially
 # immediately on load, but the ACTUAL network round-trip that flips
@@ -95,6 +102,23 @@ def run_session():
         )
         try:
             page = browser.new_page(viewport={"width": 430, "height": 932})
+
+            # FIX: Render's OOM-restart email confirmed headless Chromium
+            # was exceeding the worker's 512MB memory limit. This app's
+            # scoring/signal logic runs entirely on JSON fetch responses and
+            # JS/DOM text state — nothing about it depends on images, fonts,
+            # or media actually rendering, since no human ever looks at this
+            # browser's pixels. Blocking those resource types at the network
+            # level is a real, meaningful memory reduction with zero
+            # functional risk for a headless-only browser. Does NOT block
+            # stylesheets or scripts — those could plausibly affect JS
+            # behavior indirectly, not worth the risk for a smaller saving.
+            def _block_heavy_resources(route):
+                if route.request.resource_type in ("image", "font", "media"):
+                    route.abort()
+                else:
+                    route.continue_()
+            page.route("**/*", _block_heavy_resources)
 
             # Must run BEFORE the app's own scripts execute on navigation —
             # add_init_script (not a post-load page.evaluate) guarantees this
