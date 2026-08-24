@@ -1,1 +1,19 @@
-playwright==1.62.0
+# PRO Trader — combined requirements for both Render services
+# (protrader-server: server.py, protrader-worker: worker.py)
+#
+# Built directly from the actual `import`/`from` statements confirmed
+# present in both files — nothing added speculatively. If you already
+# have a requirements.txt deployed and things are otherwise working,
+# treat this as a checklist to diff against rather than a blind
+# replacement — I don't have visibility into what's currently pinned
+# and tested working in your actual Render deployment.
+
+# server.py
+flask
+flask-cors
+requests
+pywebpush
+supabase
+
+# worker.py
+playwright
