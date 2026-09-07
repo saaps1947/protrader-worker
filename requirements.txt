@@ -1,19 +1,14 @@
-# PRO Trader — combined requirements for both Render services
-# (protrader-server: server.py, protrader-worker: worker.py)
+# PRO Trader — protrader-worker requirements
 #
-# Built directly from the actual `import`/`from` statements confirmed
-# present in both files — nothing added speculatively. If you already
-# have a requirements.txt deployed and things are otherwise working,
-# treat this as a checklist to diff against rather than a blind
-# replacement — I don't have visibility into what's currently pinned
-# and tested working in your actual Render deployment.
+# This MUST be named exactly "requirements.txt" and sit at the root of the
+# protrader-worker repo — confirmed directly from the repo's own Dockerfile
+# (COPY requirements.txt . / RUN pip install -r requirements.txt).
+#
+# playwright==1.62.0 is a REQUIRED exact match, not a suggestion — the
+# Dockerfile's base image is pinned to mcr.microsoft.com/playwright/python:v1.62.0-noble,
+# and its own comment is explicit: a mismatch between this version and the
+# image tag causes a real runtime failure, not just a build warning. Do
+# not remove this pin, and if the Dockerfile's image tag is ever bumped,
+# this version must be bumped to match in the same change.
 
-# server.py
-flask
-flask-cors
-requests
-pywebpush
-supabase
-
-# worker.py
-playwright
+playwright==1.62.0
