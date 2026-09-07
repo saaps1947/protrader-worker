@@ -1,0 +1,15 @@
+# PRO Trader — protrader-worker requirements
+#
+# Built directly from the actual import/from statements confirmed present
+# in worker.py — playwright is genuinely the only third-party dependency;
+# everything else it uses (os, time, sys, traceback, datetime) is Python's
+# own standard library.
+#
+# Deliberately left unpinned rather than copying the old worker_requirements.txt's
+# playwright==1.62.0 pin — that version dates from before this session's work
+# and I have no direct evidence it still matches what's actually installed
+# and working in your current worker deployment. If you want a pinned
+# version for reproducibility, check what Render's build logs show as
+# currently installed and working, rather than trusting an old, unverified pin.
+
+playwright
