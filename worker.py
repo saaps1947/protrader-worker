@@ -128,6 +128,14 @@ def run_session():
             page.add_init_script(f"localStorage.setItem('pt_server', '{SERVER_URL}');")
             log(f"Injected SERVER_URL: {SERVER_URL}")
 
+            # FIX: index.html labels each signal it sends with
+            # _source = window.IS_WORKER ? "worker" : "client", but nothing ever
+            # set IS_WORKER — so every signal this worker produced was recorded
+            # in Supabase as "client", making it impossible to tell background
+            # work from the phone. Must run before the app's scripts, like above.
+            page.add_init_script("window.IS_WORKER = true;")
+            log("Injected IS_WORKER=true (signals will be labelled 'worker')")
+
             # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
             # 5 minutes — not enough to see WHY it flips. This intercepts
             # every read/write to window.serverOk via a property descriptor,
