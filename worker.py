@@ -134,7 +134,7 @@ def run_session():
             # in Supabase as "client", making it impossible to tell background
             # work from the phone. Must run before the app's scripts, like above.
             page.add_init_script("window.IS_WORKER = true;")
-            log("Injected IS_WORKER=true (signals will be labelled 'worker')")
+            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-10-09")
 
             # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
             # 5 minutes — not enough to see WHY it flips. This intercepts
