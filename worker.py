@@ -34,13 +34,15 @@ import os
 import time
 import sys
 import traceback
+import json
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # ── CONFIG ───────────────────────────────────────────────────────────────
-APP_URL = "https://saaps1947.github.io/Protrader/"
+APP_URL = os.environ.get("PROTRADER_APP_URL", "https://saaps1947.github.io/Protrader/")
 # BUG FIX: the app reads its backend URL from localStorage.getItem("pt_server"),
 # set once via the phone's Settings screen. That's fine for a real browser
 # with persistent history — but this worker launches a brand-new, empty
@@ -65,7 +67,7 @@ SERVER_URL = os.environ.get("PROTRADER_SERVER_URL", "https://protrader-server.on
 # often, which costs a brief pause, not lost state (nothing persists
 # between sessions in a fresh headless profile anyway).
 RESTART_EVERY_SECONDS = 90 * 60   # 90 minutes
-HEALTH_LOG_EVERY_SECONDS = 5 * 60     # print a heartbeat every 5 min
+HEALTH_LOG_EVERY_SECONDS = int(os.environ.get("HEARTBEAT_SECONDS", 5 * 60))  # heartbeat + server ping every 5 min
 # The app's own init sequence fires its first /market call essentially
 # immediately on load, but the ACTUAL network round-trip that flips
 # serverOk=true takes real time — confirmed in production logs: the
@@ -74,6 +76,18 @@ HEALTH_LOG_EVERY_SECONDS = 5 * 60     # print a heartbeat every 5 min
 # in this timing, not a real connectivity problem. First check now waits
 # long enough to give that fetch a fair chance to actually complete.
 FIRST_HEALTH_CHECK_DELAY_SECONDS = 25
+
+
+def ping_server(stats, session_min):
+    """Nov 16: tell the server we are alive every heartbeat, even when no signal fires.
+    The server's watchdog alerts on your phone if these pings stop."""
+    try:
+        body = json.dumps({**stats, "session_min": session_min}).encode()
+        req = urllib.request.Request(SERVER_URL.rstrip("/") + "/worker_ping", data=body,
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=20).read()
+    except Exception as e:
+        log(f"ping to server failed: {e}")
 
 
 def log(msg):
@@ -134,7 +148,7 @@ def run_session():
             # in Supabase as "client", making it impossible to tell background
             # work from the phone. Must run before the app's scripts, like above.
             page.add_init_script("window.IS_WORKER = true;")
-            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-10-09")
+            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-16")
 
             # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
             # 5 minutes — not enough to see WHY it flips. This intercepts
@@ -192,6 +206,7 @@ def run_session():
 
             session_start = time.time()
             last_health_log = time.time() - HEALTH_LOG_EVERY_SECONDS + FIRST_HEALTH_CHECK_DELAY_SECONDS
+            server_down_checks = 0
 
             while True:
                 elapsed = time.time() - session_start
@@ -209,16 +224,26 @@ def run_session():
                                 journalOpen: (typeof SIGNAL_LOG!=='undefined')
                                     ? SIGNAL_LOG.filter(x=>x.status==='OPEN'||x.status==='T1_HIT').length
                                     : -1,
-                                serverOk: (typeof serverOk!=='undefined') ? serverOk : null
+                                serverOk: (typeof serverOk!=='undefined') ? serverOk : null,
+                                ver: (document.querySelector('.ver')||{}).textContent || null
                             })
                         """)
                         log(f"heartbeat — live signals: {stats['signals']}, "
                             f"open trades: {stats['journalOpen']}, "
-                            f"server reachable: {stats['serverOk']}")
+                            f"server reachable: {stats['serverOk']}, app {stats.get('ver')}")
                     except Exception as e:
                         log(f"heartbeat check failed (page may have crashed): {e}")
                         raise  # let the outer loop relaunch
                     last_health_log = time.time()
+                    ping_server({"signals": stats.get("signals"), "open_trades": stats.get("journalOpen"),
+                                 "serverOk": stats.get("serverOk"), "ver": stats.get("ver")},
+                                round((time.time() - session_start) / 60))
+                    # Nov 16: if the page can't reach the server for 3 heartbeats in a row
+                    # (15 min), start a fresh browser instead of sitting there broken.
+                    server_down_checks = server_down_checks + 1 if stats.get("serverOk") is False else 0
+                    if server_down_checks >= 3:
+                        log("page could not reach the server for 15 min — relaunching the browser")
+                        return
 
                 time.sleep(10)
         finally:
