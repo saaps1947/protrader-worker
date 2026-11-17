@@ -146,6 +146,22 @@ def run_session():
                     route.continue_()
             page.route("**/*", _block_heavy_resources)
 
+            # Nov 17 (2): send every request to OUR server through Playwright's own network
+            # client instead of Chromium's connection pool. Live data showed requests stuck on
+            # a silently-dead browser connection for ~300 s at a time (market data, premiums,
+            # signal uploads, snapshots). Playwright's client opens/reuses its own sockets and is
+            # unaffected; requests stay concurrent (tested: 8 at once, no queueing).
+            _srv_prefix = SERVER_URL.rstrip("/") + "/"
+            def _via_playwright_client(route):
+                try:
+                    resp = route.fetch(timeout=65000)
+                    route.fulfill(response=resp)
+                except Exception as e:
+                    try: route.abort()
+                    except Exception: pass
+            page.route(lambda url: url.startswith(_srv_prefix), _via_playwright_client)
+            log(f"Requests to {_srv_prefix} go through Playwright's network client (bypasses browser connection pool)")
+
             # Must run BEFORE the app's own scripts execute on navigation —
             # add_init_script (not a post-load page.evaluate) guarantees this
             # ordering. Sets the exact localStorage key index.html already
@@ -160,7 +176,7 @@ def run_session():
             # in Supabase as "client", making it impossible to tell background
             # work from the phone. Must run before the app's scripts, like above.
             page.add_init_script("window.IS_WORKER = true;")
-            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-17b (HTTP/1.1)")
+            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-17c (direct server requests)")
 
             # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
             # 5 minutes — not enough to see WHY it flips. This intercepts
