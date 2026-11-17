@@ -78,6 +78,7 @@ HEALTH_LOG_EVERY_SECONDS = int(os.environ.get("HEARTBEAT_SECONDS", 5 * 60))  # h
 FIRST_HEALTH_CHECK_DELAY_SECONDS = 25
 
 
+WORKER_BUILD = "2026-11-17e (no request interception, live event loop)"
 LAST_ERR = {"fetch": None}
 NET = {"start": {}, "slow": [], "max_inflight": 0}   # Nov 17: which requests to the server are slow / stuck
 RESTARTS = {"n": 0}
@@ -124,6 +125,7 @@ def run_session():
                 # only one request, and that request's own timeout frees it.
                 "--disable-http2",
                 "--disable-quic",
+                "--blink-settings=imagesEnabled=false",  # memory saving, replaces the old route-based image block
             ],
         )
         try:
@@ -139,28 +141,15 @@ def run_session():
             # functional risk for a headless-only browser. Does NOT block
             # stylesheets or scripts — those could plausibly affect JS
             # behavior indirectly, not worth the risk for a smaller saving.
-            def _block_heavy_resources(route):
-                if route.request.resource_type in ("image", "font", "media"):
-                    route.abort()
-                else:
-                    route.continue_()
-            page.route("**/*", _block_heavy_resources)
-
-            # Nov 17 (2): send every request to OUR server through Playwright's own network
-            # client instead of Chromium's connection pool. Live data showed requests stuck on
-            # a silently-dead browser connection for ~300 s at a time (market data, premiums,
-            # signal uploads, snapshots). Playwright's client opens/reuses its own sockets and is
-            # unaffected; requests stay concurrent (tested: 8 at once, no queueing).
-            _srv_prefix = SERVER_URL.rstrip("/") + "/"
-            def _via_playwright_client(route):
-                try:
-                    resp = route.fetch(timeout=65000)
-                    route.fulfill(response=resp)
-                except Exception as e:
-                    try: route.abort()
-                    except Exception: pass
-            page.route(lambda url: url.startswith(_srv_prefix), _via_playwright_client)
-            log(f"Requests to {_srv_prefix} go through Playwright's network client (bypasses browser connection pool)")
+            # Nov 17 (3) ROOT CAUSE of the ~300 s stalls: page.route() handlers are Python code, and
+            # with Playwright's sync API they only run while the main thread is inside a Playwright
+            # call. The loop below slept with time.sleep() and only called Playwright at the 5-min
+            # heartbeat — so EVERY request the app made (market data, OI, premiums, signal uploads,
+            # snapshots) sat waiting for up to 300 s. Reproduced locally: request never completes
+            # during time.sleep, completes in ~30 ms during page.wait_for_timeout.
+            # Fix: no Python handler in the request path at all (images are switched off with a
+            # Chromium flag instead), and the loop waits with page.wait_for_timeout so console/
+            # network events are processed in real time.
 
             # Must run BEFORE the app's own scripts execute on navigation —
             # add_init_script (not a post-load page.evaluate) guarantees this
@@ -176,7 +165,7 @@ def run_session():
             # in Supabase as "client", making it impossible to tell background
             # work from the phone. Must run before the app's scripts, like above.
             page.add_init_script("window.IS_WORKER = true;")
-            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-17c (direct server requests)")
+            log(f"Injected IS_WORKER=true (signals will be labelled 'worker') — worker build {WORKER_BUILD}")
 
             # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
             # 5 minutes — not enough to see WHY it flips. This intercepts
@@ -285,8 +274,8 @@ def run_session():
                         raise  # let the outer loop relaunch
                     last_health_log = time.time()
                     ping_server({"signals": stats.get("signals"), "open_trades": stats.get("journalOpen"),
-                                 "serverOk": stats.get("serverOk"), "ver": stats.get("ver"),
-                                 "last_fetch_error": LAST_ERR.get("fetch"), "restarts": RESTARTS["n"],
+                                 "serverOk": stats.get("serverOk"), "ver": f"{stats.get('ver')} · worker {WORKER_BUILD[:11]}",
+                                 "last_fetch_error": LAST_ERR.get("fetch"), "restarts": RESTARTS["n"], "worker_build": WORKER_BUILD,
                                  "open_requests": len(NET["start"]), "max_open_requests": NET["max_inflight"],
                                  "oldest_open": sorted(f"{v[1]} {v[2]} {time.time()-v[0]:.0f}s" for v in NET["start"].values())[-4:],
                                  "slow_requests": NET["slow"][-6:]},
@@ -296,7 +285,7 @@ def run_session():
                     # (54 signals in a 6-minute session), so it restarted the browser every 15 min
                     # and cut data capture. Only a real crash (heartbeat failing) relaunches now.
 
-                time.sleep(10)
+                page.wait_for_timeout(10000)  # NOT time.sleep: keeps Playwright events flowing
         finally:
             browser.close()
 
