@@ -79,6 +79,7 @@ FIRST_HEALTH_CHECK_DELAY_SECONDS = 25
 
 
 LAST_ERR = {"fetch": None}
+NET = {"start": {}, "slow": [], "max_inflight": 0}   # Nov 17: which requests to the server are slow / stuck
 RESTARTS = {"n": 0}
 
 
@@ -198,6 +199,23 @@ def run_session():
             # only lives in the browser's Network panel, invisible from here
             # until now. Without this, "something 404'd" was unactionable —
             # this makes it a specific, fixable finding on the next run.
+            def _short(u):
+                return u.split(".onrender.com")[-1].split("?")[0][:40] if ".onrender.com" in u else u.split("?")[0][-40:]
+            def on_request(request):
+                if SERVER_URL.split("//")[-1] in request.url:
+                    NET["start"][id(request)] = (time.time(), request.method, _short(request.url))
+                    NET["max_inflight"] = max(NET["max_inflight"], len(NET["start"]))
+            def _done(request, how):
+                st = NET["start"].pop(id(request), None)
+                if st:
+                    dt = time.time() - st[0]
+                    if dt > 15:
+                        NET["slow"].append((datetime.now(IST).strftime("%H:%M"), f"{st[1]} {st[2]} {dt:.0f}s {how}"))
+                        NET["slow"] = NET["slow"][-12:]
+                        log(f"[slow-request] {st[1]} {st[2]} took {dt:.0f}s ({how}); still open: {len(NET['start'])}")
+            page.on("request", on_request)
+            page.on("requestfinished", lambda r: _done(r, "ok"))
+            page.on("requestfailed", lambda r: _done(r, f"failed: {r.failure}"))
             def on_response(response):
                 if response.status >= 400:
                     log(f"[network] {response.status} {response.request.method} {response.url}")
@@ -214,6 +232,7 @@ def run_session():
             session_start = time.time()
             last_health_log = time.time() - HEALTH_LOG_EVERY_SECONDS + FIRST_HEALTH_CHECK_DELAY_SECONDS
             LAST_ERR["fetch"] = None
+            NET["start"].clear(); NET["max_inflight"] = 0
 
             while True:
                 elapsed = time.time() - session_start
@@ -244,7 +263,10 @@ def run_session():
                     last_health_log = time.time()
                     ping_server({"signals": stats.get("signals"), "open_trades": stats.get("journalOpen"),
                                  "serverOk": stats.get("serverOk"), "ver": stats.get("ver"),
-                                 "last_fetch_error": LAST_ERR.get("fetch"), "restarts": RESTARTS["n"]},
+                                 "last_fetch_error": LAST_ERR.get("fetch"), "restarts": RESTARTS["n"],
+                                 "open_requests": len(NET["start"]), "max_open_requests": NET["max_inflight"],
+                                 "oldest_open": sorted(f"{v[1]} {v[2]} {time.time()-v[0]:.0f}s" for v in NET["start"].values())[-4:],
+                                 "slow_requests": NET["slow"][-6:]},
                                 round((time.time() - session_start) / 60))
                     # Nov 17: the Nov 16 rule "relaunch after 3 heartbeats with serverOk=false" is
                     # REMOVED — on the live system serverOk stays false even while the page works
