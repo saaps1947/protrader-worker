@@ -78,6 +78,10 @@ HEALTH_LOG_EVERY_SECONDS = int(os.environ.get("HEARTBEAT_SECONDS", 5 * 60))  # h
 FIRST_HEALTH_CHECK_DELAY_SECONDS = 25
 
 
+LAST_ERR = {"fetch": None}
+RESTARTS = {"n": 0}
+
+
 def ping_server(stats, session_min):
     """Nov 16: tell the server we are alive every heartbeat, even when no signal fires.
     The server's watchdog alerts on your phone if these pings stop."""
@@ -148,7 +152,7 @@ def run_session():
             # in Supabase as "client", making it impossible to tell background
             # work from the phone. Must run before the app's scripts, like above.
             page.add_init_script("window.IS_WORKER = true;")
-            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-16")
+            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-17")
 
             # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
             # 5 minutes — not enough to see WHY it flips. This intercepts
@@ -177,6 +181,9 @@ def run_session():
             # /market calls are succeeding, etc. Filtered to skip pure noise.
             def on_console(msg):
                 text = msg.text
+                if (msg.type == "error" or "[fetchFromServer] failed" in text
+                        or ("[Premium" in text and "network/timeout" in text)):
+                    LAST_ERR["fetch"] = datetime.now(IST).strftime("%H:%M ") + text[:160]
                 # Skip extremely chatty, low-value lines; keep everything
                 # else so real problems are visible in Render's Logs tab.
                 if any(skip in text for skip in ("Keepalive", "favicon")):
@@ -206,7 +213,7 @@ def run_session():
 
             session_start = time.time()
             last_health_log = time.time() - HEALTH_LOG_EVERY_SECONDS + FIRST_HEALTH_CHECK_DELAY_SECONDS
-            server_down_checks = 0
+            LAST_ERR["fetch"] = None
 
             while True:
                 elapsed = time.time() - session_start
@@ -236,14 +243,13 @@ def run_session():
                         raise  # let the outer loop relaunch
                     last_health_log = time.time()
                     ping_server({"signals": stats.get("signals"), "open_trades": stats.get("journalOpen"),
-                                 "serverOk": stats.get("serverOk"), "ver": stats.get("ver")},
+                                 "serverOk": stats.get("serverOk"), "ver": stats.get("ver"),
+                                 "last_fetch_error": LAST_ERR.get("fetch"), "restarts": RESTARTS["n"]},
                                 round((time.time() - session_start) / 60))
-                    # Nov 16: if the page can't reach the server for 3 heartbeats in a row
-                    # (15 min), start a fresh browser instead of sitting there broken.
-                    server_down_checks = server_down_checks + 1 if stats.get("serverOk") is False else 0
-                    if server_down_checks >= 3:
-                        log("page could not reach the server for 15 min — relaunching the browser")
-                        return
+                    # Nov 17: the Nov 16 rule "relaunch after 3 heartbeats with serverOk=false" is
+                    # REMOVED — on the live system serverOk stays false even while the page works
+                    # (54 signals in a 6-minute session), so it restarted the browser every 15 min
+                    # and cut data capture. Only a real crash (heartbeat failing) relaunches now.
 
                 time.sleep(10)
         finally:
@@ -256,8 +262,10 @@ def main():
     while True:
         try:
             run_session()
+            RESTARTS["n"] += 1
             consecutive_failures = 0  # clean scheduled restart, not a failure
         except Exception:
+            RESTARTS["n"] += 1
             consecutive_failures += 1
             log(f"Session crashed (attempt {consecutive_failures}):")
             traceback.print_exc()
