@@ -117,6 +117,13 @@ def run_session():
                 "--disable-gpu",
                 "--disable-dev-shm-usage",  # avoid /dev/shm size issues in containers
                 "--no-sandbox",
+                # Nov 17: live data showed every batch of requests to the server stalling for
+                # ~300 s, every 5 minutes, then succeeding — the signature of ONE multiplexed
+                # HTTP/2 (or QUIC) connection that went dead silently, with every request queued
+                # on it. Plain HTTP/1.1 uses several separate connections, so a dead one can stall
+                # only one request, and that request's own timeout frees it.
+                "--disable-http2",
+                "--disable-quic",
             ],
         )
         try:
@@ -153,7 +160,7 @@ def run_session():
             # in Supabase as "client", making it impossible to tell background
             # work from the phone. Must run before the app's scripts, like above.
             page.add_init_script("window.IS_WORKER = true;")
-            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-17")
+            log("Injected IS_WORKER=true (signals will be labelled 'worker') — worker build 2026-11-17b (HTTP/1.1)")
 
             # DIAGNOSTIC: heartbeat only shows serverOk at one instant every
             # 5 minutes — not enough to see WHY it flips. This intercepts
